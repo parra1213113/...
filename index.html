@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Banco de pruebas de carga</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0;background:#0e1116;color:#e6e9ef;font:14px/1.5 ui-sans-serif,system-ui,sans-serif;padding:26px}
+  .box{max-width:760px;margin:0 auto}
+  h1{font-size:17px;font-weight:500;margin:0 0 4px}
+  p.sub{color:#8b93a1;font-size:12px;margin:0 0 16px}
+  .card{background:#151a21;border:1px solid #252c36;border-radius:12px;padding:16px}
+  label{display:block;font-size:11px;color:#8b93a1;margin-bottom:5px}
+  .row{display:flex;gap:8px}
+  input[type=text]{flex:1;min-width:0;background:#0e1116;color:#e6e9ef;border:1px solid #252c36;border-radius:8px;padding:10px;font:inherit}
+  input[type=text]:focus{outline:none;border-color:#3b82f6}
+  button{border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:500;cursor:pointer}
+  #go{background:#3b82f6;color:#fff}
+  #halt{background:#252c36;color:#e6e9ef}
+  button:disabled{opacity:.45;cursor:default}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+  input[type=range]{width:100%;accent-color:#3b82f6;margin-top:6px}
+  select{width:100%;background:#0e1116;color:#e6e9ef;border:1px solid #252c36;border-radius:8px;padding:8px;font:inherit}
+  .chk{display:flex;gap:7px;align-items:center;margin-top:14px;font-size:12px;color:#8b93a1}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:1px;background:#252c36;border:1px solid #252c36;border-radius:8px;overflow:hidden;margin-top:16px}
+  .st{background:#151a21;padding:9px 5px;text-align:center}
+  .st span{display:block;font-size:10px;color:#8b93a1;margin-bottom:3px}
+  .st b{font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+  .ok{color:#22c55e}.bad{color:#ef4444}.warn{color:#f59e0b}
+  #log{background:#0e1116;border:1px solid #252c36;border-radius:8px;margin-top:14px;padding:9px 11px;font:11px/1.7 ui-monospace,SFMono-Regular,monospace;max-height:170px;overflow:auto;color:#8b93a1}
+  .e{color:#ef4444}.g{color:#22c55e}.y{color:#f59e0b}
+  .foot{margin-top:12px;padding-top:10px;border-top:1px solid #252c36;font-size:11px;color:#8b93a1;line-height:1.55}
+  code{background:#0e1116;padding:1px 4px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Banco de pruebas de carga</h1>
+  <p class="sub">Hasta 1000 huecos, 16 motores en paralelo, pipeline mixto y registro de diagnóstico.</p>
+  <div class="card">
+    <label for="u">Dirección</label>
+    <div class="row">
+      <input type="text" id="u" placeholder="https://ejemplo.com" spellcheck="false">
+      <button id="go">Iniciar</button>
+      <button id="halt" disabled>Parar</button>
+    </div>
+    <div class="grid">
+      <div><label>Huecos: <b id="cv">120</b></label><input type="range" id="c" min="1" max="1000" value="120"></div>
+      <div><label>Motores: <b id="wv">12</b></label><input type="range" id="w" min="0" max="16" value="12"></div>
+      <div><label>Tiempo agotado: <b id="tv">4</b> s</label><input type="range" id="t" min="2" max="15" value="4"></div>
+    </div>
+    <div class="grid">
+      <div><label>Duración: <b id="dv">20</b> s</label><input type="range" id="d" min="5" max="300" value="20"></div>
+      <div><label>Pipeline</label><select id="m"><option value="fetch">fetch</option><option value="mix">mixto (fetch + imagen)</option></select></div>
+      <div><label>&nbsp;</label><button id="cp" style="width:100%;background:#252c36;color:#e6e9ef">Copiar resumen</button></div>
+    </div>
+    <label class="chk"><input type="checkbox" id="cb" checked> Parámetro anti-caché</label>
+    <div class="stats">
+      <div class="st"><span>enviadas</span><b id="s1">0</b></div>
+      <div class="st"><span>respondidas</span><b id="s2" class="ok">0</b></div>
+      <div class="st"><span>fallidas</span><b id="s3" class="bad">0</b></div>
+      <div class="st"><span>en vuelo</span><b id="s4" class="warn">0</b></div>
+      <div class="st"><span>pet/s</span><b id="s5">0</b></div>
+      <div class="st"><span>p95</span><b id="s7">–</b></div>
+    </div>
+    <div id="log"><div>Listo. Pega una dirección y pulsa iniciar.</div></div>
+    <div class="foot">Con <code>no-cors</code> no se lee el estado HTTP: "respondidas" incluye 429 y 503. Si el registro dice que no hay motores, el navegador está bloqueando los workers y todo irá por el hilo principal.</div>
+  </div>
+</div>
+<script>
+(function(){
+const $=i=>document.getElementById(i);
+const u=$('u'),c=$('c'),w=$('w'),t=$('t'),d=$('d'),m=$('m'),cb=$('cb'),go=$('go'),halt=$('halt'),cp=$('cp'),log=$('log');
+let on=false,ctrl=null,sent=0,ok=0,bad=0,fly=0,ls=0,ln=0,st=[],lat=[],tk=null,tm=null,ws=[],t0=0,dur=0;
+const SRC=`let on=false,base='',bust=true,to=8000,slots=1,i=0,ok=0,bad=0,f=null;
+function mk(){let x=base;if(bust)x+=(x.includes('?')?'&':'?')+'n='+Date.now()+i++;return x;}
+async function loop(){while(on){const a=new AbortController(),T=setTimeout(()=>a.abort(),to);
+try{await fetch(mk(),{mode:'no-cors',cache:'no-store',signal:a.signal});ok++;}catch(e){bad++;}
+clearTimeout(T);}}
+self.onmessage=e=>{const q=e.data;
+if(q.cmd==='start'){on=true;base=q.url;bust=q.bust;to=q.to;slots=q.slots;
+for(let k=0;k<slots;k++)loop();
+f=setInterval(()=>{if(ok||bad){self.postMessage({ok,bad});ok=0;bad=0;}},250);}
+if(q.cmd==='stop'){on=false;clearInterval(f);}};`;
+function say(msg,cls){const el=document.createElement('div');if(cls)el.className=cls;
+el.textContent=new Date().toLocaleTimeString()+'  '+msg;log.appendChild(el);log.scrollTop=log.scrollHeight;}
+function combine(a,b){if(AbortSignal.any)return AbortSignal.any([a,b]);
+const ctl=new AbortController();const kill=()=>ctl.abort();
+a.addEventListener('abort',kill);b.addEventListener('abort',kill);return ctl.signal;}
+c.oninput=()=>cv.textContent=c.value;
+w.oninput=()=>wv.textContent=w.value;
+t.oninput=()=>tv.textContent=t.value;
+d.oninput=()=>dv.textContent=d.value;
+if(localStorage.pwurl)u.value=localStorage.pwurl;
+function p95(){if(!lat.length)return null;const a=[...lat].sort((x,y)=>x-y);return Math.round(a[Math.min(a.length-1,Math.floor(a.length*.95))]);}
+function paint(){const n=Date.now();st=st.filter(x=>n-x<1000);
+s1.textContent=sent;s2.textContent=ok;s3.textContent=bad;s4.textContent=fly;s5.textContent=st.length;
+const p=p95();s7.textContent=p===null?'–':p+' ms';}
+function mk(u2,i){return cb.checked?u2+(u2.includes('?')?'&':'?')+'n='+Date.now()+i:u2;}
+async function slotFetch(base){let i=0;while(on){const t1=performance.now();sent++;st.push(Date.now());fly++;
+try{await fetch(mk(base,i++),{mode:'no-cors',cache:'no-store',signal:combine(ctrl.signal,AbortSignal.timeout(+t.value*1000))});
+ok++;const l=performance.now()-t1;ls+=l;ln++;lat.push(l);if(lat.length>500)lat.shift();}
+catch(e){if(on)bad++;}finally{fly--;}}}
+function slotImg(base){return new Promise(async res=>{let i=0;while(on){
+const url=mk(base,i++);sent++;st.push(Date.now());fly++;const t1=performance.now();
+const done=await new Promise(r=>{const im=new Image();let f=0;
+const fin=v=>{if(f)return;f=1;im.onload=im.onerror=null;im.src='';r(v);};
+im.onload=()=>fin(1);im.onerror=()=>fin(0);im.src=url;setTimeout(()=>fin(0),+t.value*1000);});
+if(done){ok++;const l=performance.now()-t1;ls+=l;ln++;lat.push(l);if(lat.length>500)lat.shift();}
+else if(on)bad++;fly--;}res();});}
+function slot(base){return m.value==='mix'?Promise.race([slotFetch(base),slotImg(base)]):slotFetch(base);}
+async function start(){
+  const raw=u.value.trim();
+  if(!raw){say('Falta la dirección. Escribe una URL.','e');u.focus();return;}
+  let base=raw;if(!/^https?:\/\//i.test(base))base='https://'+base;
+  u.value=base;localStorage.pwurl=base;
+  if(!window.fetch){say('Este navegador no tiene fetch.','e');return;}
+  sent=ok=bad=fly=ls=ln=0;st=[];lat=[];log.innerHTML='';
+  say('Probando '+base+' con una petición de control…');
+  go.disabled=true;halt.disabled=false;
+  const t1=performance.now();
+  try{
+    await fetch(mk(base,0),{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(8000)});
+    say('Control correcto en '+Math.round(performance.now()-t1)+' ms. Arrancando.','g');
+  }catch(e){
+    say('Control fallido: '+e.name+' — '+(e.message||'sin detalle'),'e');
+    if(e.name==='AbortError'||e.name==='TimeoutError')
+      say('El servidor no responde o está filtrando. Sigo igualmente para ver si con más carga cambia.','y');
+  }
+  on=true;ctrl=new AbortController();dur=+d.value;t0=Date.now();
+  const n=+c.value;let enginesOk=0;
+  const want=+w.value;
+  if(want>0&&window.Worker){
+    const per=Math.max(1,Math.floor(n/(want+1)));
+    for(let k=0;k<want;k++){
+      try{
+        const blob=new Blob([SRC],{type:'text/javascript'});
+        const wk=new Worker(URL.createObjectURL(blob));
+        wk.onmessage=e=>{sent+=e.data.ok+e.data.bad;ok+=e.data.ok;bad+=e.data.bad;};
+        wk.onerror=e=>say('Error en motor: '+(e.message||'desconocido'),'e');
+        wk.postMessage({cmd:'start',url:base,bust:cb.checked,to:+t.value*1000,slots:per});
+        ws.push(wk);enginesOk++;
+      }catch(e){say('Motor '+k+' bloqueado: '+e.name,'y');break;}
+    }
+  }
+  if(enginesOk===0)say('Sin motores: todo va por el hilo principal. Menos paralelismo real.','y');
+  else say('Motores activos: '+enginesOk+' de '+want+'.','g');
+  const per=Math.max(1,Math.floor(n/Math.max(1,want+1)));
+  const rest=Math.max(1,n-enginesOk*per);
+  for(let k=0;k<rest;k++)slot(base);
+  tk=setInterval(paint,250);tm=setTimeout(stop,dur*1000);
+}
+function stop(){if(!on)return;on=false;clearTimeout(tm);clearInterval(tk);
+ws.forEach(x=>{try{x.postMessage({cmd:'stop'})}catch(e){}});
+setTimeout(()=>ws.forEach(x=>{try{x.terminate()}catch(e){}}),400);ws=[];
+ctrl&&ctrl.abort();go.disabled=false;halt.disabled=true;
+say('Parado. Enviadas '+sent+', respondidas '+ok+', fallidas '+bad+'.','y');paint();}
+go.onclick=start;halt.onclick=stop;
+cp.onclick=()=>{const txt=`${u.value} | enviadas ${sent} | respondidas ${ok} | fallidas ${bad} | pet/s ${st.length} | p95 ${p95()||0}ms`;
+if(navigator.clipboard)navigator.clipboard.writeText(txt);
+cp.textContent='Copiado';setTimeout(()=>cp.textContent='Copiar resumen',1200);};
+})();
+</script>
+</body>
+</html>
